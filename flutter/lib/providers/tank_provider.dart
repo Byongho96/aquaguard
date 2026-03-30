@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
+import '../models/alert_model.dart';
 import '../models/tank_model.dart';
 import '../services/api_service.dart';
 
@@ -21,6 +22,14 @@ class TankProvider with ChangeNotifier {
   int _pollingSeconds = 1;
   PollingMode _currentMode = PollingMode.none;
   String? _currentDetailTankId;
+
+  // 항상 실행되는 백그라운드 폴링 타이머 (상세 페이지에서도 알림 감지용)
+  Timer? _backgroundTimer;
+
+  // 현재 이상이 감지된 수조별 알림 (tankId → TankAlert)
+  final Map<String, TankAlert> _currentAlerts = {};
+  // 사용자가 닫은 알림 키 (tankId:message)
+  final Set<String> _dismissedAlertKeys = {};
 
   final Map<String, String> _tankNames = <String, String>{};
   final Map<String, TankHistoryModel> _tankHistories =
@@ -41,8 +50,14 @@ class TankProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   int get pollingSeconds => _pollingSeconds;
 
+  /// 현재 활성 상태이며 아직 닫지 않은 알림 목록
+  List<TankAlert> get pendingAlerts => _currentAlerts.values
+      .where((a) => !_dismissedAlertKeys.contains(a.key))
+      .toList();
+
   TankProvider() {
     _loadLocalSettings();
+    _startBackgroundTimer();
   }
 
   // 폴링 주기 로드 (임계값은 수조 데이터 조회 시 함께 로드)
@@ -78,6 +93,7 @@ class TankProvider with ChangeNotifier {
 
   Future<void> startMainPolling() async {
     _stopTimer();
+    _stopBackgroundTimer();
     _currentMode = PollingMode.main;
 
     _isLoading = true;
@@ -117,11 +133,24 @@ class TankProvider with ChangeNotifier {
     _stopTimer();
     _currentMode = PollingMode.none;
     _currentDetailTankId = null;
+    _startBackgroundTimer();
   }
 
   void _stopTimer() {
     _pollingTimer?.cancel();
     _pollingTimer = null;
+  }
+
+  void _startBackgroundTimer() {
+    _backgroundTimer?.cancel();
+    _backgroundTimer = Timer.periodic(_pollingDuration, (_) async {
+      await _fetchAllRealtimeData();
+    });
+  }
+
+  void _stopBackgroundTimer() {
+    _backgroundTimer?.cancel();
+    _backgroundTimer = null;
   }
 
   Future<void> _fetchAllRealtimeData() async {
@@ -166,6 +195,7 @@ class TankProvider with ChangeNotifier {
       }
 
       _tanks = updatedTanks;
+      _updateAlerts();
       notifyListeners();
     } catch (e) {
       print('Main Polling Error: $e');
@@ -262,9 +292,81 @@ class TankProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // ──────────────────────────────────────────
+  // 알림 관련
+  // ──────────────────────────────────────────
+
+  void _updateAlerts() {
+    for (final TankModel tank in _tanks) {
+      final TankAlert? alert = _computeAlertForTank(tank);
+      final TankAlert? existing = _currentAlerts[tank.id];
+
+      if (alert != null) {
+        if (existing?.key != alert.key) {
+          _dismissedAlertKeys.remove(existing?.key);
+        }
+        _currentAlerts[tank.id] = alert;
+      } else {
+        if (existing != null) {
+          _dismissedAlertKeys.remove(existing.key);
+          _currentAlerts.remove(tank.id);
+        }
+      }
+    }
+  }
+
+  TankAlert? _computeAlertForTank(TankModel tank) {
+    final List<double> turbidityT = getThreshold(tank.id, 'turbidity');
+    if (tank.turbidity < turbidityT[0] || tank.turbidity > turbidityT[1]) {
+      return TankAlert(
+        tankId: tank.id,
+        message: '탁도 이상 감지',
+        severity: AlertSeverity.critical,
+      );
+    }
+
+    final List<double> tempT = getThreshold(tank.id, 'temperature');
+    if (tank.temperature < tempT[0] || tank.temperature > tempT[1]) {
+      return TankAlert(
+        tankId: tank.id,
+        message: '수온 이상 감지',
+        severity: AlertSeverity.warning,
+      );
+    }
+
+    final List<double> phT = getThreshold(tank.id, 'ph');
+    if (tank.ph < phT[0] || tank.ph > phT[1]) {
+      return TankAlert(
+        tankId: tank.id,
+        message: 'pH 이상 감지',
+        severity: AlertSeverity.warning,
+      );
+    }
+
+    final List<double> oxygenT = getThreshold(tank.id, 'oxygen');
+    if (tank.oxygen < oxygenT[0] || tank.oxygen > oxygenT[1]) {
+      return TankAlert(
+        tankId: tank.id,
+        message: '용존산소량 이상 감지',
+        severity: AlertSeverity.warning,
+      );
+    }
+
+    return null;
+  }
+
+  void dismissAlert(String tankId) {
+    final TankAlert? alert = _currentAlerts[tankId];
+    if (alert != null) {
+      _dismissedAlertKeys.add(alert.key);
+      notifyListeners();
+    }
+  }
+
   @override
   void dispose() {
     _stopTimer();
+    _stopBackgroundTimer();
     super.dispose();
   }
 }

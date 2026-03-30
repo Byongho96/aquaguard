@@ -5,6 +5,7 @@ import 'core/theme/app_theme.dart';
 import 'providers/app_state_provider.dart';
 import 'providers/tank_provider.dart';
 import 'views/main_page.dart';
+import 'widgets/alert_notification_overlay.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +24,9 @@ void main() {
 class AquaGuardApp extends StatelessWidget {
   const AquaGuardApp({Key? key}) : super(key: key);
 
+  static final GlobalKey<NavigatorState> _navigatorKey =
+      GlobalKey<NavigatorState>();
+
   static const AppBarTheme _appBarTheme = AppBarTheme(
     backgroundColor: Colors.transparent,
     elevation: 0,
@@ -35,12 +39,15 @@ class AquaGuardApp extends StatelessWidget {
     return MaterialApp(
       title: 'AquaGuard Live',
       debugShowCheckedModeBanner: false,
+      navigatorKey: _navigatorKey,
       theme: ThemeData(
         primaryColor: AppTheme.cardColor,
         scaffoldBackgroundColor: AppTheme.backgroundColor,
         fontFamily: 'Roboto',
         appBarTheme: _appBarTheme,
       ),
+      builder: (context, child) =>
+          AlertNotificationOverlay(navigatorKey: _navigatorKey, child: child!),
       home: const MainPage(),
     );
   }
