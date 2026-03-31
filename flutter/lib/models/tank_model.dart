@@ -26,6 +26,17 @@ class TankModel {
     );
   }
 
+  // WebSocket(STOMP) 응답을 모델로 변환합니다.
+  factory TankModel.fromWebSocket(Map<String, dynamic> json) {
+    return TankModel(
+      id: json['tankId'] as String,
+      temperature: (json['temperature'] as num).toDouble(),
+      oxygen: (json['oxygen'] as num).toDouble(),
+      ph: (json['pH'] as num).toDouble(),
+      turbidity: (json['turbidity'] as num).toDouble(),
+    );
+  }
+
   TankModel copyWith({
     double? temperature,
     double? oxygen,

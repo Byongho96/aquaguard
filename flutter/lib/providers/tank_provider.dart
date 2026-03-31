@@ -7,24 +7,18 @@ import '../core/constants/app_constants.dart';
 import '../models/alert_model.dart';
 import '../models/tank_model.dart';
 import '../services/api_service.dart';
-
-enum PollingMode { none, main, detail }
+import '../services/websocket_service.dart';
 
 class TankProvider with ChangeNotifier {
   final ApiService _apiService = AppConstants.useMockData
       ? MockApiService()
       : DioApiService();
+  final WebSocketService _wsService = WebSocketService();
 
   List<TankModel> _tanks = [];
   bool _isLoading = false;
 
-  Timer? _pollingTimer;
-  int _pollingSeconds = 1;
-  PollingMode _currentMode = PollingMode.none;
   String? _currentDetailTankId;
-
-  // 항상 실행되는 백그라운드 폴링 타이머 (상세 페이지에서도 알림 감지용)
-  Timer? _backgroundTimer;
 
   // 현재 이상이 감지된 수조별 알림 (tankId → TankAlert)
   final Map<String, TankAlert> _currentAlerts = {};
@@ -48,7 +42,6 @@ class TankProvider with ChangeNotifier {
 
   List<TankModel> get tanks => _tanks;
   bool get isLoading => _isLoading;
-  int get pollingSeconds => _pollingSeconds;
 
   /// 현재 활성 상태이며 아직 닫지 않은 알림 목록
   List<TankAlert> get pendingAlerts => _currentAlerts.values
@@ -56,150 +49,109 @@ class TankProvider with ChangeNotifier {
       .toList();
 
   TankProvider() {
-    _loadLocalSettings();
-    _startBackgroundTimer();
+    _init();
   }
 
-  // 폴링 주기 로드 (임계값은 수조 데이터 조회 시 함께 로드)
-  Future<void> _loadLocalSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    _pollingSeconds = prefs.getInt('polling_seconds') ?? 1;
-    notifyListeners();
-  }
-
-  Duration get _pollingDuration => Duration(seconds: _pollingSeconds);
-
-  Future<void> updatePollingInterval(int seconds) async {
-    _pollingSeconds = seconds;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('polling_seconds', seconds);
-
-    if (_pollingTimer != null && _pollingTimer!.isActive) {
-      _stopTimer();
-
-      if (_currentMode == PollingMode.main) {
-        _pollingTimer = Timer.periodic(_pollingDuration, (_) async {
-          await _fetchAllRealtimeData();
-        });
-      } else if (_currentMode == PollingMode.detail &&
-          _currentDetailTankId != null) {
-        _pollingTimer = Timer.periodic(_pollingDuration, (_) async {
-          await _fetchSpecificRealtimeData(_currentDetailTankId!);
-        });
-      }
-    }
-    notifyListeners();
-  }
-
-  Future<void> startMainPolling() async {
-    _stopTimer();
-    _stopBackgroundTimer();
-    _currentMode = PollingMode.main;
-
+  Future<void> _init() async {
     _isLoading = true;
     notifyListeners();
 
-    await _fetchAllRealtimeData();
+    // 수조 목록 불러오기
+    try {
+      final tankIds = await _apiService.getTanks();
+      _tanks = tankIds
+          .map(
+            (id) => TankModel(
+              id: id,
+              temperature: 0,
+              oxygen: 0,
+              ph: 0,
+              turbidity: 0,
+            ),
+          )
+          .toList();
+    } catch (e) {
+      print('Tank list load error: $e');
+    }
+
+    // WebSocket 연결 및 구독
+    _wsService.connect(onData: _onRealtimeData);
+
+    // 연결 완료 후 구독 (약간의 대기)
+    await Future.delayed(const Duration(milliseconds: 500));
+    for (final tank in _tanks) {
+      _wsService.subscribeTank(tank.id);
+    }
 
     _isLoading = false;
     notifyListeners();
-
-    _pollingTimer = Timer.periodic(_pollingDuration, (_) async {
-      await _fetchAllRealtimeData();
-    });
   }
 
-  Future<void> startDetailPolling(String tankId) async {
-    _stopTimer();
-    _currentMode = PollingMode.detail;
+  Future<void> _onRealtimeData(TankModel data) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 수조 이름 로드
+    final String? savedName = prefs.getString('tank_name_${data.id}');
+    if (savedName != null) {
+      _tankNames[data.id] = savedName;
+    }
+
+    // AI 제어 플래그 로드
+    final bool isAiControlled =
+        prefs.getBool('ai_controlled_${data.id}') ?? data.isAiControlled;
+    final TankModel updatedData = data.copyWith(isAiControlled: isAiControlled);
+
+    // 수조별 임계값 로드
+    _tankThresholds.putIfAbsent(data.id, () => {});
+    for (final String sensorKey in _defaultThresholds.keys) {
+      final double? minValue = prefs.getDouble(
+        '${data.id}_${sensorKey}_min',
+      );
+      final double? maxValue = prefs.getDouble(
+        '${data.id}_${sensorKey}_max',
+      );
+
+      if (minValue != null && maxValue != null) {
+        _tankThresholds[data.id]![sensorKey] = [minValue, maxValue];
+      } else {
+        _tankThresholds[data.id]![sensorKey] = List.from(
+          _defaultThresholds[sensorKey]!,
+        );
+      }
+    }
+
+    // 수조 목록 업데이트
+    final int idx = _tanks.indexWhere((t) => t.id == data.id);
+    if (idx != -1) {
+      _tanks[idx] = updatedData;
+    } else {
+      _tanks.add(updatedData);
+    }
+
+    // 상세 페이지 히스토리 추가
+    if (_currentDetailTankId == data.id) {
+      _appendRealtimeToHistory(data.id, updatedData);
+    }
+
+    _updateAlerts();
+    notifyListeners();
+  }
+
+  Future<void> startDetailView(String tankId) async {
     _currentDetailTankId = tankId;
 
     try {
       final history = await _apiService.getHistoryData(tankId);
       _tankHistories[tankId] = history;
       _trimHistory(tankId);
+      notifyListeners();
     } catch (e) {
       print('History Load Error: $e');
     }
-
-    await _fetchSpecificRealtimeData(tankId);
-
-    _pollingTimer = Timer.periodic(_pollingDuration, (_) async {
-      await _fetchSpecificRealtimeData(tankId);
-    });
   }
 
-  void stopPolling() {
-    _stopTimer();
-    _currentMode = PollingMode.none;
+  void stopDetailView() {
     _currentDetailTankId = null;
-    _startBackgroundTimer();
-  }
-
-  void _stopTimer() {
-    _pollingTimer?.cancel();
-    _pollingTimer = null;
-  }
-
-  void _startBackgroundTimer() {
-    _backgroundTimer?.cancel();
-    _backgroundTimer = Timer.periodic(_pollingDuration, (_) async {
-      await _fetchAllRealtimeData();
-    });
-  }
-
-  void _stopBackgroundTimer() {
-    _backgroundTimer?.cancel();
-    _backgroundTimer = null;
-  }
-
-  Future<void> _fetchAllRealtimeData() async {
-    try {
-      final tankIds = await _apiService.getTanks();
-      final prefs = await SharedPreferences.getInstance();
-      final List<TankModel> updatedTanks = <TankModel>[];
-
-      for (final String tankId in tankIds) {
-        final TankModel realtimeData = await _apiService.getRealtimeData(
-          tankId,
-        );
-
-        final String? savedName = prefs.getString('tank_name_$tankId');
-        if (savedName != null) {
-          _tankNames[tankId] = savedName;
-        }
-
-        final bool isAiControlled =
-            prefs.getBool('ai_controlled_$tankId') ??
-            realtimeData.isAiControlled;
-        updatedTanks.add(realtimeData.copyWith(isAiControlled: isAiControlled));
-
-        // 수조별 임계값 로드
-        _tankThresholds.putIfAbsent(tankId, () => {});
-        for (final String sensorKey in _defaultThresholds.keys) {
-          final double? minValue = prefs.getDouble(
-            '${tankId}_${sensorKey}_min',
-          );
-          final double? maxValue = prefs.getDouble(
-            '${tankId}_${sensorKey}_max',
-          );
-
-          if (minValue != null && maxValue != null) {
-            _tankThresholds[tankId]![sensorKey] = [minValue, maxValue];
-          } else {
-            _tankThresholds[tankId]![sensorKey] = List.from(
-              _defaultThresholds[sensorKey]!,
-            );
-          }
-        }
-      }
-
-      _tanks = updatedTanks;
-      _updateAlerts();
-      notifyListeners();
-    } catch (e) {
-      print('Main Polling Error: $e');
-    }
   }
 
   void _trimHistory(String tankId) {
@@ -226,23 +178,6 @@ class TankProvider with ChangeNotifier {
     history.ph.add(newData.ph);
     history.turbidity.add(newData.turbidity);
     _trimHistory(tankId);
-  }
-
-  Future<void> _fetchSpecificRealtimeData(String tankId) async {
-    try {
-      final TankModel updatedData = await _apiService.getRealtimeData(tankId);
-      final int tankIndex = _tanks.indexWhere((t) => t.id == tankId);
-
-      if (tankIndex != -1) {
-        _tanks[tankIndex] = updatedData.copyWith(
-          isAiControlled: _tanks[tankIndex].isAiControlled,
-        );
-        _appendRealtimeToHistory(tankId, updatedData);
-        notifyListeners();
-      }
-    } catch (e) {
-      print('Detail Polling Error: $e');
-    }
   }
 
   Future<void> toggleAiControl(String tankId, bool value) async {
@@ -365,8 +300,7 @@ class TankProvider with ChangeNotifier {
 
   @override
   void dispose() {
-    _stopTimer();
-    _stopBackgroundTimer();
+    _wsService.disconnect();
     super.dispose();
   }
 }

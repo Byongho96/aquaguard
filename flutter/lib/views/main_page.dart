@@ -18,16 +18,6 @@ class _MainPageState extends State<MainPage> {
   @override
   void initState() {
     super.initState();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<TankProvider>().startMainPolling();
-    });
-  }
-
-  @override
-  void dispose() {
-    context.read<TankProvider>().stopPolling();
-    super.dispose();
   }
 
   @override

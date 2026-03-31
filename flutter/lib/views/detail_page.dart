@@ -49,13 +49,13 @@ class _DetailPageState extends State<DetailPage> {
     super.initState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<TankProvider>().startDetailPolling(widget.tankId);
+      context.read<TankProvider>().startDetailView(widget.tankId);
     });
   }
 
   @override
   void dispose() {
-    context.read<TankProvider>().stopPolling();
+    context.read<TankProvider>().stopDetailView();
     super.dispose();
   }
 

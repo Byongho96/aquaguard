@@ -39,6 +39,7 @@ dependencies:
   fl_chart: ^1.2.0
   connectivity_plus: ^7.0.0
   dio: ^5.9.2
+  stomp_dart_client: ^2.0.0
 
 dev_dependencies:
   flutter_test:
