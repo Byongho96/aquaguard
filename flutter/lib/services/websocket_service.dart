@@ -48,9 +48,10 @@ class WebSocketService {
       destination: '/topic/tanks/$tankId/realtime',
       callback: (frame) {
         if (frame.body != null && _onData != null) {
+          print('[WS] /topic/tanks/$tankId/realtime -> ${frame.body}');
           final Map<String, dynamic> json =
               jsonDecode(frame.body!) as Map<String, dynamic>;
-          final TankModel model = TankModel.fromWebSocket(json);
+          final TankModel model = TankModel.fromWebSocket(tankId, json);
           _onData!(model);
         }
       },

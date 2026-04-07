@@ -20,7 +20,7 @@ class TankProvider with ChangeNotifier {
 
   String? _currentDetailTankId;
 
-  // 현재 이상이 감지된 수조별 알림 (tankId → TankAlert)
+  // 현재 활성 상태의 알림 (alertKey -> TankAlert)
   final Map<String, TankAlert> _currentAlerts = {};
   // 사용자가 닫은 알림 키 (tankId:message)
   final Set<String> _dismissedAlertKeys = {};
@@ -28,6 +28,8 @@ class TankProvider with ChangeNotifier {
   final Map<String, String> _tankNames = <String, String>{};
   final Map<String, TankHistoryModel> _tankHistories =
       <String, TankHistoryModel>{};
+  final Map<String, Map<String, bool>> _tankSensorControlStates =
+      <String, Map<String, bool>>{};
   static const int _maxGraphPoints = 20;
 
   // 🎯 전역 설정에서 수조별(tankId) 설정으로 변경
@@ -36,9 +38,20 @@ class TankProvider with ChangeNotifier {
   final Map<String, List<double>> _defaultThresholds = <String, List<double>>{
     'temperature': [10.0, 30.0],
     'oxygen': [5.0, 15.0],
-    'ph': [6.0, 8.5],
+    'salt': [0.0, 40.0],
     'turbidity': [0.0, 15.0],
   };
+  static const List<String> _sensorKeys = <String>[
+    'temperature',
+    'oxygen',
+    'salt',
+    'turbidity',
+  ];
+  static const List<String> _controllableSensorKeys = <String>[
+    'temperature',
+    'oxygen',
+    'turbidity',
+  ];
 
   List<TankModel> get tanks => _tanks;
   bool get isLoading => _isLoading;
@@ -58,18 +71,33 @@ class TankProvider with ChangeNotifier {
 
     // 수조 목록 불러오기
     try {
-      final tankIds = await _apiService.getTanks();
-      _tanks = tankIds
+      final tankSummaries = await _apiService.getTanks();
+      _tanks = tankSummaries
           .map(
-            (id) => TankModel(
-              id: id,
+            (tank) => TankModel(
+              id: tank.tankId,
               temperature: 0,
               oxygen: 0,
-              ph: 0,
+              salt: 0,
               turbidity: 0,
             ),
           )
           .toList();
+
+      for (final tank in tankSummaries) {
+        _tankSensorControlStates[tank.tankId] = _sensorControlMapFromSummary(
+          tank,
+        );
+      }
+
+      await Future.wait(
+        tankSummaries.map((tank) async {
+          await Future.wait([
+            _loadThresholdsForTank(tank.tankId),
+            _loadAiEnableStateForTank(tank.tankId),
+          ]);
+        }),
+      );
     } catch (e) {
       print('Tank list load error: $e');
     }
@@ -96,36 +124,29 @@ class TankProvider with ChangeNotifier {
       _tankNames[data.id] = savedName;
     }
 
-    // AI 제어 플래그 로드
-    final bool isAiControlled =
-        prefs.getBool('ai_controlled_${data.id}') ?? data.isAiControlled;
+    // 기존 수조 항목의 AI 제어 상태를 유지합니다.
+    final int idx = _tanks.indexWhere((t) => t.id == data.id);
+    final bool isAiControlled = idx != -1
+        ? _tanks[idx].isAiControlled
+        : data.isAiControlled;
     final TankModel updatedData = data.copyWith(isAiControlled: isAiControlled);
 
-    // 수조별 임계값 로드
-    _tankThresholds.putIfAbsent(data.id, () => {});
-    for (final String sensorKey in _defaultThresholds.keys) {
-      final double? minValue = prefs.getDouble(
-        '${data.id}_${sensorKey}_min',
-      );
-      final double? maxValue = prefs.getDouble(
-        '${data.id}_${sensorKey}_max',
-      );
+    // 수조별 임계값은 서버에서 조회합니다.
+    if (!_tankThresholds.containsKey(data.id)) {
+      await _loadThresholdsForTank(data.id);
+    }
 
-      if (minValue != null && maxValue != null) {
-        _tankThresholds[data.id]![sensorKey] = [minValue, maxValue];
-      } else {
-        _tankThresholds[data.id]![sensorKey] = List.from(
-          _defaultThresholds[sensorKey]!,
-        );
-      }
+    if (!_tankSensorControlStates.containsKey(data.id)) {
+      await _loadSensorControlStatesForTank(data.id);
     }
 
     // 수조 목록 업데이트
-    final int idx = _tanks.indexWhere((t) => t.id == data.id);
     if (idx != -1) {
       _tanks[idx] = updatedData;
     } else {
       _tanks.add(updatedData);
+      await _loadSensorControlStatesForTank(data.id);
+      await _loadAiEnableStateForTank(data.id);
     }
 
     // 상세 페이지 히스토리 추가
@@ -141,6 +162,12 @@ class TankProvider with ChangeNotifier {
     _currentDetailTankId = tankId;
 
     try {
+      if (!_tankThresholds.containsKey(tankId)) {
+        await _loadThresholdsForTank(tankId);
+      }
+      if (!_tankSensorControlStates.containsKey(tankId)) {
+        await _loadSensorControlStatesForTank(tankId);
+      }
       final history = await _apiService.getHistoryData(tankId);
       _tankHistories[tankId] = history;
       _trimHistory(tankId);
@@ -163,7 +190,7 @@ class TankProvider with ChangeNotifier {
     final int removeCount = history.temperature.length - _maxGraphPoints;
     history.temperature.removeRange(0, removeCount);
     history.oxygen.removeRange(0, removeCount);
-    history.ph.removeRange(0, removeCount);
+    history.salt.removeRange(0, removeCount);
     history.turbidity.removeRange(0, removeCount);
   }
 
@@ -175,7 +202,7 @@ class TankProvider with ChangeNotifier {
 
     history.temperature.add(newData.temperature);
     history.oxygen.add(newData.oxygen);
-    history.ph.add(newData.ph);
+    history.salt.add(newData.salt);
     history.turbidity.add(newData.turbidity);
     _trimHistory(tankId);
   }
@@ -183,10 +210,121 @@ class TankProvider with ChangeNotifier {
   Future<void> toggleAiControl(String tankId, bool value) async {
     final int tankIndex = _tanks.indexWhere((t) => t.id == tankId);
     if (tankIndex != -1) {
+      final bool previousValue = _tanks[tankIndex].isAiControlled;
       _tanks[tankIndex] = _tanks[tankIndex].copyWith(isAiControlled: value);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('ai_controlled_$tankId', value);
       notifyListeners();
+
+      try {
+        final bool updatedState = await _apiService.updateAiEnableState(
+          tankId,
+          value,
+        );
+        _tanks[tankIndex] = _tanks[tankIndex].copyWith(
+          isAiControlled: updatedState,
+        );
+      } catch (e) {
+        _tanks[tankIndex] = _tanks[tankIndex].copyWith(
+          isAiControlled: previousValue,
+        );
+        print('AI control update error ($tankId): $e');
+      }
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadAiEnableStateForTank(String tankId) async {
+    try {
+      final bool state = await _apiService.getAiEnableState(tankId);
+      final int tankIndex = _tanks.indexWhere((t) => t.id == tankId);
+      if (tankIndex != -1) {
+        _tanks[tankIndex] = _tanks[tankIndex].copyWith(isAiControlled: state);
+      }
+    } catch (_) {
+      // 서버 조회 실패 시 기본값(false)을 유지합니다.
+    }
+  }
+
+  Map<String, bool> _sensorControlMapFromSummary(TankSummaryModel tank) {
+    final Map<String, bool> mapped = <String, bool>{
+      'temperature': false,
+      'oxygen': false,
+      'turbidity': false,
+    };
+
+    for (final sensor in tank.sensors) {
+      final String? key = _sensorKeyFromSensorId(sensor.sensorId);
+      if (key != null && mapped.containsKey(key)) {
+        mapped[key] = sensor.state;
+      }
+    }
+
+    return mapped;
+  }
+
+  String? _sensorKeyFromSensorId(String sensorId) {
+    switch (sensorId) {
+      case 'temperature':
+        return 'temperature';
+      case 'do':
+        return 'oxygen';
+      case 'ntu':
+        return 'turbidity';
+      case 'salt':
+        return 'salt';
+      default:
+        return null;
+    }
+  }
+
+  bool getSensorControlState(String tankId, String sensorKey) {
+    return _tankSensorControlStates[tankId]?[sensorKey] ?? false;
+  }
+
+  Future<void> toggleSensorControl(
+    String tankId,
+    String sensorKey,
+    bool value,
+  ) async {
+    if (!_controllableSensorKeys.contains(sensorKey)) {
+      return;
+    }
+
+    _tankSensorControlStates.putIfAbsent(tankId, () => <String, bool>{});
+    final bool previous = _tankSensorControlStates[tankId]?[sensorKey] ?? false;
+    _tankSensorControlStates[tankId]![sensorKey] = value;
+    notifyListeners();
+
+    try {
+      final String sensorId = _sensorIdFromKey(sensorKey);
+      final bool updated = await _apiService.updateSensorControlState(
+        tankId,
+        sensorId,
+        value,
+      );
+      _tankSensorControlStates[tankId]![sensorKey] = updated;
+    } catch (e) {
+      _tankSensorControlStates[tankId]![sensorKey] = previous;
+      print('Sensor control update error ($tankId/$sensorKey): $e');
+      rethrow;
+    }
+
+    notifyListeners();
+  }
+
+  Future<void> _loadSensorControlStatesForTank(String tankId) async {
+    _tankSensorControlStates.putIfAbsent(tankId, () => <String, bool>{});
+
+    for (final String sensorKey in _controllableSensorKeys) {
+      final String sensorId = _sensorIdFromKey(sensorKey);
+      try {
+        final bool state = await _apiService.getSensorControlState(
+          tankId,
+          sensorId,
+        );
+        _tankSensorControlStates[tankId]![sensorKey] = state;
+      } catch (_) {
+        _tankSensorControlStates[tankId]!.putIfAbsent(sensorKey, () => false);
+      }
     }
   }
 
@@ -212,12 +350,48 @@ class TankProvider with ChangeNotifier {
     double max,
   ) async {
     _tankThresholds.putIfAbsent(tankId, () => {});
-    _tankThresholds[tankId]![sensorType] = [min, max];
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('${tankId}_${sensorType}_min', min);
-    await prefs.setDouble('${tankId}_${sensorType}_max', max);
+    final String sensorId = _sensorIdFromKey(sensorType);
+    final List<double> updatedRange = await _apiService.updateSensorRange(
+      tankId,
+      sensorId,
+      min,
+      max,
+    );
+    _tankThresholds[tankId]![sensorType] = updatedRange;
     notifyListeners();
+  }
+
+  String _sensorIdFromKey(String sensorKey) {
+    switch (sensorKey) {
+      case 'oxygen':
+        return 'do';
+      case 'turbidity':
+        return 'ntu';
+      case 'salt':
+        return 'salt';
+      case 'temperature':
+      default:
+        return 'temperature';
+    }
+  }
+
+  Future<void> _loadThresholdsForTank(String tankId) async {
+    _tankThresholds.putIfAbsent(tankId, () => {});
+
+    for (final String sensorKey in _sensorKeys) {
+      final String sensorId = _sensorIdFromKey(sensorKey);
+      try {
+        final List<double> range = await _apiService.getSensorRange(
+          tankId,
+          sensorId,
+        );
+        _tankThresholds[tankId]![sensorKey] = range;
+      } catch (_) {
+        _tankThresholds[tankId]![sensorKey] = List<double>.from(
+          _defaultThresholds[sensorKey]!,
+        );
+      }
+    }
   }
 
   Future<void> updateTankName(String tankId, String newName) async {
@@ -232,68 +406,79 @@ class TankProvider with ChangeNotifier {
   // ──────────────────────────────────────────
 
   void _updateAlerts() {
-    for (final TankModel tank in _tanks) {
-      final TankAlert? alert = _computeAlertForTank(tank);
-      final TankAlert? existing = _currentAlerts[tank.id];
+    final Map<String, TankAlert> nextAlerts = <String, TankAlert>{};
 
-      if (alert != null) {
-        if (existing?.key != alert.key) {
-          _dismissedAlertKeys.remove(existing?.key);
-        }
-        _currentAlerts[tank.id] = alert;
-      } else {
-        if (existing != null) {
-          _dismissedAlertKeys.remove(existing.key);
-          _currentAlerts.remove(tank.id);
-        }
+    for (final TankModel tank in _tanks) {
+      for (final TankAlert alert in _computeAlertsForTank(tank)) {
+        nextAlerts[alert.key] = alert;
       }
     }
+
+    final List<String> removedKeys = _currentAlerts.keys
+        .where((key) => !nextAlerts.containsKey(key))
+        .toList();
+    for (final key in removedKeys) {
+      _dismissedAlertKeys.remove(key);
+    }
+
+    _currentAlerts
+      ..clear()
+      ..addAll(nextAlerts);
   }
 
-  TankAlert? _computeAlertForTank(TankModel tank) {
+  List<TankAlert> _computeAlertsForTank(TankModel tank) {
+    final List<TankAlert> alerts = <TankAlert>[];
+
     final List<double> turbidityT = getThreshold(tank.id, 'turbidity');
     if (tank.turbidity < turbidityT[0] || tank.turbidity > turbidityT[1]) {
-      return TankAlert(
+      alerts.add(
+        TankAlert(
         tankId: tank.id,
         message: '탁도 이상 감지',
         severity: AlertSeverity.critical,
+        ),
       );
     }
 
     final List<double> tempT = getThreshold(tank.id, 'temperature');
     if (tank.temperature < tempT[0] || tank.temperature > tempT[1]) {
-      return TankAlert(
+      alerts.add(
+        TankAlert(
         tankId: tank.id,
-        message: '수온 이상 감지',
+        message: '온도 이상 감지',
         severity: AlertSeverity.warning,
+        ),
       );
     }
 
-    final List<double> phT = getThreshold(tank.id, 'ph');
-    if (tank.ph < phT[0] || tank.ph > phT[1]) {
-      return TankAlert(
+    final List<double> saltT = getThreshold(tank.id, 'salt');
+    if (tank.salt < saltT[0] || tank.salt > saltT[1]) {
+      alerts.add(
+        TankAlert(
         tankId: tank.id,
-        message: 'pH 이상 감지',
+        message: '염도 이상 감지',
         severity: AlertSeverity.warning,
+        ),
       );
     }
 
     final List<double> oxygenT = getThreshold(tank.id, 'oxygen');
     if (tank.oxygen < oxygenT[0] || tank.oxygen > oxygenT[1]) {
-      return TankAlert(
+      alerts.add(
+        TankAlert(
         tankId: tank.id,
         message: '용존산소량 이상 감지',
         severity: AlertSeverity.warning,
+        ),
       );
     }
 
-    return null;
+    return alerts;
   }
 
-  void dismissAlert(String tankId) {
-    final TankAlert? alert = _currentAlerts[tankId];
-    if (alert != null) {
-      _dismissedAlertKeys.add(alert.key);
+  void dismissAlert(String alertKey) {
+    if (_currentAlerts.containsKey(alertKey)) {
+      _dismissedAlertKeys.add(alertKey);
       notifyListeners();
     }
   }

@@ -42,7 +42,7 @@ class AlertNotificationOverlay extends StatelessWidget {
                           onViewDetail: () => _navigateToDetail(context, alert),
                           onDismiss: () => context
                               .read<TankProvider>()
-                              .dismissAlert(alert.tankId),
+                              .dismissAlert(alert.key),
                         ),
                       ),
                     )
@@ -62,7 +62,7 @@ class AlertNotificationOverlay extends StatelessWidget {
     if (tankIndex == -1) return;
 
     // 알림 닫기 후 상세 페이지로 이동
-    provider.dismissAlert(alert.tankId);
+    provider.dismissAlert(alert.key);
 
     navigatorKey.currentState?.push(
       MaterialPageRoute(

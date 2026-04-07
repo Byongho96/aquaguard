@@ -7,6 +7,7 @@ class SensorCard extends StatelessWidget {
   final String title;
   final String value;
   final String unit;
+  final bool isAlert;
 
   const SensorCard({
     Key? key,
@@ -14,23 +15,27 @@ class SensorCard extends StatelessWidget {
     required this.title,
     required this.value,
     required this.unit,
+    this.isAlert = false,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    const Color iconAndTitleColor = Colors.white70;
+    const Color valueColor = Colors.white;
+
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.cardColor,
+        color: isAlert ? const Color(0xFF2F2F2F) : AppTheme.cardColor,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: Colors.white70, size: 24),
+          Icon(icon, color: iconAndTitleColor, size: 24),
           const SizedBox(height: 4),
           Text(
             title,
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            style: TextStyle(color: iconAndTitleColor, fontSize: 12),
           ),
           const SizedBox(height: 8),
           Row(
@@ -40,15 +45,15 @@ class SensorCard extends StatelessWidget {
             children: [
               Text(
                 value,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: valueColor,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               Text(
                 unit,
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                style: TextStyle(color: iconAndTitleColor, fontSize: 14),
               ),
             ],
           ),

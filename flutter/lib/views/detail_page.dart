@@ -23,7 +23,7 @@ class _DetailPageState extends State<DetailPage> {
   static const Map<String, Map<String, dynamic>> _sensorMeta =
       <String, Map<String, dynamic>>{
         'temperature': <String, dynamic>{
-          'title': '수온',
+          'title': '온도',
           'unit': '°C',
           'icon': Icons.thermostat,
         },
@@ -32,8 +32,8 @@ class _DetailPageState extends State<DetailPage> {
           'unit': 'mg/L',
           'icon': Icons.bubble_chart,
         },
-        'ph': <String, dynamic>{
-          'title': 'pH',
+        'salt': <String, dynamic>{
+          'title': '염도',
           'unit': '',
           'icon': Icons.science,
         },
@@ -190,15 +190,24 @@ class _DetailPageState extends State<DetailPage> {
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
-            onPressed: () {
-              // 개별 수조 임계값 저장
-              provider.updateThreshold(
-                widget.tankId,
-                key,
-                double.tryParse(minController.text) ?? 0.0,
-                double.tryParse(maxController.text) ?? 100.0,
-              );
-              Navigator.pop(context);
+            onPressed: () async {
+              try {
+                await provider.updateThreshold(
+                  widget.tankId,
+                  key,
+                  double.tryParse(minController.text) ?? 0.0,
+                  double.tryParse(maxController.text) ?? 100.0,
+                );
+                if (context.mounted) {
+                  Navigator.pop(context);
+                }
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('범위 저장에 실패했습니다.')),
+                  );
+                }
+              }
             },
             child: const Text(
               '저장',
@@ -225,6 +234,22 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
+  Future<void> _toggleSensorControl(
+    TankProvider provider,
+    String sensorKey,
+    bool value,
+  ) async {
+    try {
+      await provider.toggleSensorControl(widget.tankId, sensorKey, value);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('자동제어 상태 저장에 실패했습니다.')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final TankProvider provider = context.watch<TankProvider>();
@@ -239,7 +264,7 @@ class _DetailPageState extends State<DetailPage> {
     final Map<String, List<double>> thresholds = <String, List<double>>{
       'temperature': provider.getThreshold(widget.tankId, 'temperature'),
       'oxygen': provider.getThreshold(widget.tankId, 'oxygen'),
-      'ph': provider.getThreshold(widget.tankId, 'ph'),
+      'salt': provider.getThreshold(widget.tankId, 'salt'),
       'turbidity': provider.getThreshold(widget.tankId, 'turbidity'),
     };
 
@@ -248,7 +273,7 @@ class _DetailPageState extends State<DetailPage> {
 
     final List<double> tempTh = thresholds['temperature']!;
     final List<double> oxyTh = thresholds['oxygen']!;
-    final List<double> phTh = thresholds['ph']!;
+    final List<double> saltTh = thresholds['salt']!;
     final List<double> turbTh = thresholds['turbidity']!;
 
     return Scaffold(
@@ -301,7 +326,7 @@ class _DetailPageState extends State<DetailPage> {
                               minThreshold: tempTh[0],
                               maxThreshold: tempTh[1],
                               icon: Icons.thermostat,
-                              title: '수온',
+                              title: '온도',
                               value: '${tank.temperature}',
                               unit: '°C',
                               isAlert:
@@ -310,6 +335,17 @@ class _DetailPageState extends State<DetailPage> {
                               historyData: history?.temperature ?? [],
                               onTap: () =>
                                   _selectAndEdit(provider, 'temperature'),
+                              controlLabel: '냉각기',
+                              controlValue: provider.getSensorControlState(
+                                widget.tankId,
+                                'temperature',
+                              ),
+                              onControlChanged: (value) => _toggleSensorControl(
+                                provider,
+                                'temperature',
+                                value,
+                              ),
+                              controlEnabled: !tank.isAiControlled,
                             ),
                           ),
                           const SizedBox(width: 24),
@@ -326,6 +362,17 @@ class _DetailPageState extends State<DetailPage> {
                                   tank.oxygen > oxyTh[1],
                               historyData: history?.oxygen ?? [],
                               onTap: () => _selectAndEdit(provider, 'oxygen'),
+                              controlLabel: '공기펌프',
+                              controlValue: provider.getSensorControlState(
+                                widget.tankId,
+                                'oxygen',
+                              ),
+                              onControlChanged: (value) => _toggleSensorControl(
+                                provider,
+                                'oxygen',
+                                value,
+                              ),
+                              controlEnabled: !tank.isAiControlled,
                             ),
                           ),
                         ],
@@ -337,15 +384,17 @@ class _DetailPageState extends State<DetailPage> {
                         children: [
                           Expanded(
                             child: SensorGraphCard(
-                              minThreshold: phTh[0],
-                              maxThreshold: phTh[1],
+                              minThreshold: saltTh[0],
+                              maxThreshold: saltTh[1],
                               icon: Icons.science,
-                              title: 'pH',
-                              value: '${tank.ph}',
+                              title: '염도',
+                              value: '${tank.salt}',
                               unit: '',
-                              isAlert: tank.ph < phTh[0] || tank.ph > phTh[1],
-                              historyData: history?.ph ?? [],
-                              onTap: () => _selectAndEdit(provider, 'ph'),
+                              isAlert:
+                                  tank.salt < saltTh[0] ||
+                                  tank.salt > saltTh[1],
+                              historyData: history?.salt ?? [],
+                              onTap: () => _selectAndEdit(provider, 'salt'),
                             ),
                           ),
                           const SizedBox(width: 24),
@@ -363,6 +412,17 @@ class _DetailPageState extends State<DetailPage> {
                               historyData: history?.turbidity ?? [],
                               onTap: () =>
                                   _selectAndEdit(provider, 'turbidity'),
+                              controlLabel: '물펌프',
+                              controlValue: provider.getSensorControlState(
+                                widget.tankId,
+                                'turbidity',
+                              ),
+                              onControlChanged: (value) => _toggleSensorControl(
+                                provider,
+                                'turbidity',
+                                value,
+                              ),
+                              controlEnabled: !tank.isAiControlled,
                             ),
                           ),
                         ],

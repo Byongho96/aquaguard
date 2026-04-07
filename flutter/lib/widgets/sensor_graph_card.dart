@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../core/theme/app_theme.dart';
@@ -16,6 +17,10 @@ class SensorGraphCard extends StatelessWidget {
 
   final double minThreshold;
   final double maxThreshold;
+  final String? controlLabel;
+  final bool? controlValue;
+  final ValueChanged<bool>? onControlChanged;
+  final bool controlEnabled;
 
   const SensorGraphCard({
     Key? key,
@@ -28,6 +33,10 @@ class SensorGraphCard extends StatelessWidget {
     this.isAlert = false,
     required this.minThreshold,
     required this.maxThreshold,
+    this.controlLabel,
+    this.controlValue,
+    this.onControlChanged,
+    this.controlEnabled = true,
   }) : super(key: key);
 
   @override
@@ -147,6 +156,40 @@ class SensorGraphCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (controlLabel != null && controlValue != null)
+                Positioned(
+                  left: 12,
+                  bottom: 12,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$controlLabel',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        CupertinoSwitch(
+                          value: controlValue!,
+                          onChanged: controlEnabled ? onControlChanged : null,
+                          activeColor: const Color(0xFF64DD17),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

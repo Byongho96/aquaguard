@@ -58,6 +58,31 @@ class _MainPageState extends State<MainPage> {
     final TankProvider provider = context.read<TankProvider>();
     final String tankName = provider.getTankName(tank.id, tankIndex);
 
+    final List<double> temperatureThreshold = provider.getThreshold(
+      tank.id,
+      'temperature',
+    );
+    final List<double> oxygenThreshold = provider.getThreshold(
+      tank.id,
+      'oxygen',
+    );
+    final List<double> saltThreshold = provider.getThreshold(tank.id, 'salt');
+    final List<double> turbidityThreshold = provider.getThreshold(
+      tank.id,
+      'turbidity',
+    );
+
+    final bool isTempAlert =
+        tank.temperature < temperatureThreshold[0] ||
+        tank.temperature > temperatureThreshold[1];
+    final bool isOxygenAlert =
+        tank.oxygen < oxygenThreshold[0] || tank.oxygen > oxygenThreshold[1];
+    final bool isSaltAlert =
+        tank.salt < saltThreshold[0] || tank.salt > saltThreshold[1];
+    final bool isTurbidityAlert =
+        tank.turbidity < turbidityThreshold[0] ||
+        tank.turbidity > turbidityThreshold[1];
+
     final _TankStatusViewData statusData = _resolveStatusData(provider, tank);
 
     return Material(
@@ -116,9 +141,10 @@ class _MainPageState extends State<MainPage> {
                           Expanded(
                             child: SensorCard(
                               icon: Icons.thermostat,
-                              title: '수온',
+                              title: '온도',
                               value: '${tank.temperature}',
                               unit: '°C',
+                              isAlert: isTempAlert,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -128,6 +154,7 @@ class _MainPageState extends State<MainPage> {
                               title: '용존산소량',
                               value: '${tank.oxygen}',
                               unit: 'mg/L',
+                              isAlert: isOxygenAlert,
                             ),
                           ),
                         ],
@@ -140,9 +167,10 @@ class _MainPageState extends State<MainPage> {
                           Expanded(
                             child: SensorCard(
                               icon: Icons.science,
-                              title: 'pH',
-                              value: '${tank.ph}',
+                              title: '염도',
+                              value: '${tank.salt}',
                               unit: '',
+                              isAlert: isSaltAlert,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -152,6 +180,7 @@ class _MainPageState extends State<MainPage> {
                               title: '탁도',
                               value: '${tank.turbidity}',
                               unit: 'NTU',
+                              isAlert: isTurbidityAlert,
                             ),
                           ),
                         ],
@@ -208,7 +237,7 @@ class _MainPageState extends State<MainPage> {
       tank.id,
       'oxygen',
     );
-    final List<double> phThreshold = provider.getThreshold(tank.id, 'ph');
+    final List<double> saltThreshold = provider.getThreshold(tank.id, 'salt');
     final List<double> turbidityThreshold = provider.getThreshold(
       tank.id,
       'turbidity',
@@ -224,8 +253,8 @@ class _MainPageState extends State<MainPage> {
       return const _TankStatusViewData.alert('수온 이상 감지');
     }
 
-    if (tank.ph < phThreshold[0] || tank.ph > phThreshold[1]) {
-      return const _TankStatusViewData.alert('pH 이상 감지');
+    if (tank.salt < saltThreshold[0] || tank.salt > saltThreshold[1]) {
+      return const _TankStatusViewData.alert('염도 이상 감지');
     }
 
     if (tank.oxygen < oxygenThreshold[0] || tank.oxygen > oxygenThreshold[1]) {
