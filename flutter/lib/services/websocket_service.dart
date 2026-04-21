@@ -59,6 +59,26 @@ class WebSocketService {
     _subscriptions[tankId] = unsubscribe;
   }
 
+  void sendGps({
+    required String truckId,
+    required double latitude,
+    required double longitude,
+  }) {
+    if (_client == null || !_connected) return;
+
+    final Map<String, dynamic> payload = {
+      'truckId': truckId,
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+
+    _client!.send(
+      destination: '/topic/trucks/gps',
+      body: jsonEncode(payload),
+    );
+    print('[WS] Sent GPS: $payload');
+  }
+
   void unsubscribeTank(String tankId) {
     final unsubscribe = _subscriptions.remove(tankId);
     if (unsubscribe != null) {

@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'core/theme/app_theme.dart';
 import 'providers/app_state_provider.dart';
 import 'providers/tank_provider.dart';
+import 'services/background_service.dart';
 import 'views/main_page.dart';
 import 'widgets/alert_notification_overlay.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Request location permissions
+  await _requestLocationPermission();
+
+  // Initialize Background Service
+  await initializeService();
 
   runApp(
     MultiProvider(
@@ -19,6 +27,28 @@ void main() {
       child: const AquaGuardApp(),
     ),
   );
+}
+
+Future<void> _requestLocationPermission() async {
+  bool serviceEnabled;
+  LocationPermission permission;
+
+  serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    return;
+  }
+
+  permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied) {
+      return;
+    }
+  }
+
+  if (permission == LocationPermission.deniedForever) {
+    return;
+  }
 }
 
 class AquaGuardApp extends StatelessWidget {

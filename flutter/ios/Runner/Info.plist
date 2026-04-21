@@ -45,5 +45,16 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>실시간 수조 모니터링 및 트럭 위치 추적을 위해 위치 정보가 필요합니다.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>앱이 백그라운드에 있을 때도 트럭의 위치를 관제 센터로 전송하기 위해 위치 정보가 필요합니다.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>백그라운드에서 위치 정보를 수집합니다.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
 </dict>
 </plist>
